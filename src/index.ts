@@ -4,15 +4,6 @@ import { HttpClient } from '@actions/http-client';
 import type { RequestHandler, RequestInfo, RequestOptions } from '@actions/http-client/lib/interfaces';
 import { HttpClientResponse } from '@actions/http-client';
 
-interface RetrievableAccount {
-  AccountId: number;
-  AccountName: string;
-  AssetId: number;
-  AssetName: string;
-  DomainName: string | null;
-  ApiKey: string;
-}
-
 /**
  * RequestHandler that injects a client certificate into every outgoing HTTPS request.
  * Safeguard A2A requires mutual TLS — the appliance validates the client certificate
@@ -50,24 +41,21 @@ async function run(): Promise<void> {
   try {
     // --- Read inputs ---
     const applianceUrl = core.getInput('appliance_url', { required: true }).replace(/\/+$/, '');
-    const apiToken = core.getInput('api_token', { required: true });
+    const apiKey = core.getInput('api_key', { required: true });
     const clientCert = core.getInput('client_certificate', { required: true });
     const clientKey = core.getInput('client_certificate_key', { required: true });
     const clientPassphrase = core.getInput('client_certificate_passphrase');
-    const assetName = core.getInput('asset_name', { required: true });
-    const accountName = core.getInput('account_name', { required: true });
     const ignoreSsl = core.getInput('ignore_ssl').toLowerCase() === 'true';
     const apiVersion = core.getInput('api_version') || '4';
 
     // Mask secrets immediately so they never appear in logs
-    core.setSecret(apiToken);
+    core.setSecret(apiKey);
     core.setSecret(clientKey);
     if (clientPassphrase) {
       core.setSecret(clientPassphrase);
     }
 
     core.info(`Connecting to Safeguard appliance: ${applianceUrl}`);
-    core.info(`Retrieving credential for asset="${assetName}" account="${accountName}"`);
 
     // --- Configure HTTP client with mutual TLS ---
     const handlers: RequestHandler[] = [
@@ -80,70 +68,12 @@ async function run(): Promise<void> {
 
     const client = new HttpClient('sg-github-action/1.0', handlers, clientOptions);
 
-    // --- Step 1: Discover retrievable accounts to find the matching API key ---
-    const retrievableUrl = `${applianceUrl}/service/a2a/v${apiVersion}/A2ARegistrations/RetrievableAccounts`;
-    core.debug(`GET ${retrievableUrl}`);
-
-    const retrievableResponse = await client.get(retrievableUrl, {
-      'Authorization': `A2A ${apiToken}`,
-      'Accept': 'application/json',
-    });
-
-    const retrievableStatus = retrievableResponse.message.statusCode ?? 0;
-    const retrievableBody = await retrievableResponse.readBody();
-
-    if (retrievableStatus === 401 || retrievableStatus === 403) {
-      throw new Error(
-        `Authentication failed (HTTP ${retrievableStatus}). ` +
-        'Verify the A2A API token is correct and has not expired.'
-      );
-    }
-
-    if (retrievableStatus < 200 || retrievableStatus >= 300) {
-      throw new Error(
-        `Failed to list retrievable accounts (HTTP ${retrievableStatus}): ${retrievableBody}`
-      );
-    }
-
-    let accounts: RetrievableAccount[];
-    try {
-      accounts = JSON.parse(retrievableBody);
-    } catch {
-      throw new Error(`Invalid JSON response from retrievable accounts endpoint: ${retrievableBody}`);
-    }
-
-    if (!Array.isArray(accounts) || accounts.length === 0) {
-      throw new Error(
-        'No retrievable accounts found for this A2A registration. ' +
-        'Ensure the A2A registration is configured with credential retrieval access.'
-      );
-    }
-
-    // --- Step 2: Find the matching account ---
-    const matchedAccount = accounts.find(
-      (a) =>
-        a.AssetName.toLowerCase() === assetName.toLowerCase() &&
-        a.AccountName.toLowerCase() === accountName.toLowerCase()
-    );
-
-    if (!matchedAccount) {
-      const available = accounts
-        .map((a) => `${a.AssetName}/${a.AccountName}`)
-        .join(', ');
-      throw new Error(
-        `No matching account found for asset="${assetName}" account="${accountName}". ` +
-        `Available accounts: [${available}]`
-      );
-    }
-
-    core.info(`Found matching account (AccountId=${matchedAccount.AccountId}) on asset "${matchedAccount.AssetName}"`);
-
-    // --- Step 3: Retrieve the password ---
+    // --- Retrieve the password via A2A Credentials endpoint ---
     const credentialUrl = `${applianceUrl}/service/a2a/v${apiVersion}/Credentials?type=Password`;
     core.debug(`GET ${credentialUrl}`);
 
     const credentialResponse = await client.get(credentialUrl, {
-      'Authorization': `A2A ${matchedAccount.ApiKey}`,
+      'Authorization': `A2A ${apiKey}`,
       'Accept': 'application/json',
     });
 
@@ -152,14 +82,14 @@ async function run(): Promise<void> {
 
     if (credentialStatus === 401 || credentialStatus === 403) {
       throw new Error(
-        `Credential retrieval authentication failed (HTTP ${credentialStatus}). ` +
-        'The A2A API key for this account may be invalid or revoked.'
+        `Authentication failed (HTTP ${credentialStatus}). ` +
+        'Verify the A2A API key and client certificate are correct.'
       );
     }
 
     if (credentialStatus === 404) {
       throw new Error(
-        `Credential not found (HTTP 404) for asset="${assetName}" account="${accountName}". ` +
+        `Credential not found (HTTP 404). ` +
         'The password may not be set or the account may have been removed.'
       );
     }

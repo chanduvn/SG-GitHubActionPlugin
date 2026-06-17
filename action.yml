@@ -1,0 +1,47 @@
+name: 'One Identity Safeguard Credential Retrieval'
+description: 'Retrieves a privileged password from One Identity Safeguard using the Application-to-Application (A2A) REST API'
+author: 'Your Organization'
+
+branding:
+  icon: 'lock'
+  color: 'blue'
+
+inputs:
+  appliance_url:
+    description: 'The URL of the One Identity Safeguard appliance (e.g., https://safeguard.example.com)'
+    required: true
+  api_token:
+    description: 'The A2A API key (registration token) configured in Safeguard for credential retrieval'
+    required: true
+  client_certificate:
+    description: 'PEM-encoded client certificate for A2A mutual TLS authentication (the certificate content, not a file path)'
+    required: true
+  client_certificate_key:
+    description: 'PEM-encoded private key for the client certificate (the key content, not a file path)'
+    required: true
+  client_certificate_passphrase:
+    description: 'Passphrase for the private key, if encrypted (optional)'
+    required: false
+    default: ''
+  asset_name:
+    description: 'The name of the asset (target system) in Safeguard'
+    required: true
+  account_name:
+    description: 'The name of the account on the asset whose password to retrieve'
+    required: true
+  ignore_ssl:
+    description: 'Set to "true" to skip TLS certificate verification (development/lab only — never use in production)'
+    required: false
+    default: 'false'
+  api_version:
+    description: 'Safeguard API version to target'
+    required: false
+    default: '4'
+
+outputs:
+  password:
+    description: 'The retrieved privileged password (masked in logs via core.setSecret)'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

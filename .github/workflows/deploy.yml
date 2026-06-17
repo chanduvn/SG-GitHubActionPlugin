@@ -1,0 +1,47 @@
+name: Deploy with Safeguard Credentials
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Retrieve database password from Safeguard
+        id: safeguard
+        uses: ./  # References this action from the repo root; use org/repo@version for external use
+        with:
+          appliance_url: ${{ secrets.SAFEGUARD_APPLIANCE_URL }}
+          api_token: ${{ secrets.SAFEGUARD_A2A_TOKEN }}
+          client_certificate: ${{ secrets.SAFEGUARD_CLIENT_CERT }}
+          client_certificate_key: ${{ secrets.SAFEGUARD_CLIENT_KEY }}
+          # client_certificate_passphrase: ${{ secrets.SAFEGUARD_KEY_PASSPHRASE }}  # Only if key is encrypted
+          asset_name: 'prod-db-server-01'
+          account_name: 'svc_deploy'
+          # ignore_ssl: 'false'  # Default; set to 'true' only for dev/lab appliances
+
+      - name: Deploy application
+        env:
+          DB_PASSWORD: ${{ steps.safeguard.outputs.password }}
+        run: |
+          echo "Deploying with retrieved credential..."
+          # The password is masked — it will appear as *** in logs if accidentally printed
+          # Use $DB_PASSWORD in your deployment scripts, e.g.:
+          # ./deploy.sh --db-password "$DB_PASSWORD"
+          echo "Deployment complete."
+
+      # Example: Using the credential with a Docker container
+      - name: Run database migration
+        env:
+          DATABASE_URL: postgres://svc_deploy:${{ steps.safeguard.outputs.password }}@prod-db-server-01:5432/appdb
+        run: |
+          echo "Running database migrations..."
+          # npx prisma migrate deploy
+          # or: flyway -url="$DATABASE_URL" migrate
+          echo "Migrations complete."

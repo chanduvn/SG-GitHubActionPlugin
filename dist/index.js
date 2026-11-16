@@ -25685,15 +25685,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core = __importStar(__nccwpck_require__(7484));
 const http_client_1 = __nccwpck_require__(4844);
 /**
- * RequestHandler that injects a client certificate into every outgoing HTTPS request.
- * Safeguard A2A requires mutual TLS — the appliance validates the client certificate
- * before accepting any A2A API call.
+ * RequestHandler that sets the TLS options of every outgoing HTTPS request.
+ * Safeguard A2A requires mutual TLS: the appliance validates the client
+ * certificate before accepting any A2A API call.
  */
 class CertificateRequestHandler {
-    constructor(cert, key, passphrase) {
+    constructor(cert, key, passphrase, ca) {
         this.cert = cert;
         this.key = key;
-        this.passphrase = passphrase || undefined;
+        this.passphrase = passphrase;
+        this.ca = ca;
     }
     prepareRequest(options) {
         options.cert = this.cert;
@@ -25701,6 +25702,13 @@ class CertificateRequestHandler {
         if (this.passphrase) {
             options.passphrase = this.passphrase;
         }
+        if (this.ca) {
+            options.ca = this.ca;
+        }
+        // The appliance asks for the client certificate after the handshake, which
+        // a TLS 1.3 client does not answer; the certificate then never arrives and
+        // A2A answers 401. TLS 1.2 works (verified on SPP 9.0).
+        options.maxVersion = 'TLSv1.2';
     }
     canHandleAuthentication() {
         return false;
@@ -25709,108 +25717,99 @@ class CertificateRequestHandler {
         throw new Error('Certificate handler does not handle HTTP-level authentication');
     }
 }
+/** A2A `type` query value and the action output that carries the result. */
+const CREDENTIAL_TYPES = {
+    password: { query: 'Password', output: 'password' },
+    ssh_key: { query: 'PrivateKey', output: 'private_key' },
+};
+const SSH_KEY_FORMATS = ['OpenSsh', 'Ssh2', 'Putty'];
+/** GitHub masks secrets line by line, so register every line of a multi-line value. */
+function maskSecret(value) {
+    core.setSecret(value);
+    for (const line of value.split(/\r?\n/)) {
+        if (line.trim().length > 0) {
+            core.setSecret(line);
+        }
+    }
+}
 async function run() {
     try {
         // --- Read inputs ---
         const applianceUrl = core.getInput('appliance_url', { required: true }).replace(/\/+$/, '');
-        const apiToken = core.getInput('api_token', { required: true });
+        const apiKey = core.getInput('api_key', { required: true });
         const clientCert = core.getInput('client_certificate', { required: true });
         const clientKey = core.getInput('client_certificate_key', { required: true });
         const clientPassphrase = core.getInput('client_certificate_passphrase');
-        const assetName = core.getInput('asset_name', { required: true });
-        const accountName = core.getInput('account_name', { required: true });
+        const caCertificate = core.getInput('ca_certificate');
         const ignoreSsl = core.getInput('ignore_ssl').toLowerCase() === 'true';
         const apiVersion = core.getInput('api_version') || '4';
+        const credentialType = (core.getInput('credential_type') || 'password').toLowerCase();
+        const sshKeyFormat = core.getInput('ssh_key_format') || 'OpenSsh';
         // Mask secrets immediately so they never appear in logs
-        core.setSecret(apiToken);
-        core.setSecret(clientKey);
+        core.setSecret(apiKey);
+        maskSecret(clientKey);
         if (clientPassphrase) {
             core.setSecret(clientPassphrase);
         }
+        const type = CREDENTIAL_TYPES[credentialType];
+        if (!type) {
+            throw new Error(`Unsupported credential_type '${credentialType}'. Use one of: ${Object.keys(CREDENTIAL_TYPES).join(', ')}.`);
+        }
+        if (!SSH_KEY_FORMATS.includes(sshKeyFormat)) {
+            throw new Error(`Unsupported ssh_key_format '${sshKeyFormat}'. Use one of: ${SSH_KEY_FORMATS.join(', ')}.`);
+        }
+        if (ignoreSsl) {
+            core.warning('TLS certificate verification is disabled (ignore_ssl). Use ca_certificate instead outside a lab.');
+        }
         core.info(`Connecting to Safeguard appliance: ${applianceUrl}`);
-        core.info(`Retrieving credential for asset="${assetName}" account="${accountName}"`);
         // --- Configure HTTP client with mutual TLS ---
         const handlers = [
-            new CertificateRequestHandler(clientCert, clientKey, clientPassphrase),
+            new CertificateRequestHandler(clientCert, clientKey, clientPassphrase || undefined, caCertificate || undefined),
         ];
         const clientOptions = {
             ignoreSslError: ignoreSsl,
         };
-        const client = new http_client_1.HttpClient('sg-github-action/1.0', handlers, clientOptions);
-        // --- Step 1: Discover retrievable accounts to find the matching API key ---
-        const retrievableUrl = `${applianceUrl}/service/a2a/v${apiVersion}/A2ARegistrations/RetrievableAccounts`;
-        core.debug(`GET ${retrievableUrl}`);
-        const retrievableResponse = await client.get(retrievableUrl, {
-            'Authorization': `A2A ${apiToken}`,
-            'Accept': 'application/json',
-        });
-        const retrievableStatus = retrievableResponse.message.statusCode ?? 0;
-        const retrievableBody = await retrievableResponse.readBody();
-        if (retrievableStatus === 401 || retrievableStatus === 403) {
-            throw new Error(`Authentication failed (HTTP ${retrievableStatus}). ` +
-                'Verify the A2A API token is correct and has not expired.');
+        const client = new http_client_1.HttpClient('sg-github-action/1.1', handlers, clientOptions);
+        // --- Retrieve the credential via the A2A Credentials endpoint ---
+        let credentialUrl = `${applianceUrl}/service/a2a/v${apiVersion}/Credentials?type=${type.query}`;
+        if (credentialType === 'ssh_key') {
+            credentialUrl += `&keyFormat=${sshKeyFormat}`;
         }
-        if (retrievableStatus < 200 || retrievableStatus >= 300) {
-            throw new Error(`Failed to list retrievable accounts (HTTP ${retrievableStatus}): ${retrievableBody}`);
-        }
-        let accounts;
-        try {
-            accounts = JSON.parse(retrievableBody);
-        }
-        catch {
-            throw new Error(`Invalid JSON response from retrievable accounts endpoint: ${retrievableBody}`);
-        }
-        if (!Array.isArray(accounts) || accounts.length === 0) {
-            throw new Error('No retrievable accounts found for this A2A registration. ' +
-                'Ensure the A2A registration is configured with credential retrieval access.');
-        }
-        // --- Step 2: Find the matching account ---
-        const matchedAccount = accounts.find((a) => a.AssetName.toLowerCase() === assetName.toLowerCase() &&
-            a.AccountName.toLowerCase() === accountName.toLowerCase());
-        if (!matchedAccount) {
-            const available = accounts
-                .map((a) => `${a.AssetName}/${a.AccountName}`)
-                .join(', ');
-            throw new Error(`No matching account found for asset="${assetName}" account="${accountName}". ` +
-                `Available accounts: [${available}]`);
-        }
-        core.info(`Found matching account (AccountId=${matchedAccount.AccountId}) on asset "${matchedAccount.AssetName}"`);
-        // --- Step 3: Retrieve the password ---
-        const credentialUrl = `${applianceUrl}/service/a2a/v${apiVersion}/Credentials?type=Password`;
         core.debug(`GET ${credentialUrl}`);
         const credentialResponse = await client.get(credentialUrl, {
-            'Authorization': `A2A ${matchedAccount.ApiKey}`,
+            'Authorization': `A2A ${apiKey}`,
             'Accept': 'application/json',
         });
         const credentialStatus = credentialResponse.message.statusCode ?? 0;
         const credentialBody = await credentialResponse.readBody();
         if (credentialStatus === 401 || credentialStatus === 403) {
-            throw new Error(`Credential retrieval authentication failed (HTTP ${credentialStatus}). ` +
-                'The A2A API key for this account may be invalid or revoked.');
+            throw new Error(`Authentication failed (HTTP ${credentialStatus}). ` +
+                'Verify the A2A API key and client certificate are correct.');
         }
         if (credentialStatus === 404) {
-            throw new Error(`Credential not found (HTTP 404) for asset="${assetName}" account="${accountName}". ` +
-                'The password may not be set or the account may have been removed.');
+            throw new Error(`Credential not found (HTTP 404). ` +
+                'The credential may not be set or the account may have been removed.');
         }
         if (credentialStatus < 200 || credentialStatus >= 300) {
             throw new Error(`Failed to retrieve credential (HTTP ${credentialStatus}): ${credentialBody}`);
         }
-        // The A2A Credentials endpoint returns the password as a bare string (JSON-encoded)
-        let password;
+        // The A2A Credentials endpoint returns the secret as a bare string (JSON-encoded)
+        let secret;
         try {
-            password = JSON.parse(credentialBody);
+            secret = JSON.parse(credentialBody);
         }
         catch {
-            // Some Safeguard versions return the password as plain text without JSON wrapping
-            password = credentialBody.trim();
+            // Some Safeguard versions return the secret as plain text without JSON wrapping
+            secret = credentialBody.trim();
         }
-        if (!password) {
-            throw new Error('Retrieved an empty password. Verify the account has a password set in Safeguard.');
+        if (!secret || typeof secret !== 'string') {
+            throw new Error('Retrieved an empty credential. Verify the account has one set in Safeguard.');
         }
-        // --- CRITICAL: Mask the password in all subsequent log output ---
-        core.setSecret(password);
-        // --- Set the output ---
-        core.setOutput('password', password);
+        // --- CRITICAL: Mask the secret in all subsequent log output ---
+        maskSecret(secret);
+        // --- Set the outputs ---
+        core.setOutput('credential', secret);
+        core.setOutput(type.output, secret);
         core.info('Successfully retrieved and masked the credential.');
     }
     catch (error) {

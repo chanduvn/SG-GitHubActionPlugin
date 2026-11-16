@@ -18,13 +18,11 @@ jobs:
         uses: ./  # References this action from the repo root; use org/repo@version for external use
         with:
           appliance_url: ${{ secrets.SAFEGUARD_APPLIANCE_URL }}
-          api_token: ${{ secrets.SAFEGUARD_A2A_TOKEN }}
+          api_key: ${{ secrets.SAFEGUARD_A2A_API_KEY }}  # one API key per retrievable account; the key selects the account
           client_certificate: ${{ secrets.SAFEGUARD_CLIENT_CERT }}
           client_certificate_key: ${{ secrets.SAFEGUARD_CLIENT_KEY }}
           # client_certificate_passphrase: ${{ secrets.SAFEGUARD_KEY_PASSPHRASE }}  # Only if key is encrypted
-          asset_name: 'prod-db-server-01'
-          account_name: 'svc_deploy'
-          # ignore_ssl: 'false'  # Default; set to 'true' only for dev/lab appliances
+          # ca_certificate: ${{ secrets.SAFEGUARD_CA_CERT }}  # Only if the appliance uses a private CA
 
       - name: Deploy application
         env:

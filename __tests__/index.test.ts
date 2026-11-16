@@ -71,7 +71,7 @@ describe('Safeguard A2A GitHub Action', () => {
     });
 
     expect(MockedHttpClient).toHaveBeenCalledWith(
-      'sg-github-action/1.0',
+      'sg-github-action/1.1',
       expect.arrayContaining([expect.objectContaining({ cert: expect.any(String) })]),
       expect.any(Object)
     );
@@ -138,7 +138,7 @@ describe('Safeguard A2A GitHub Action', () => {
     });
 
     expect(mockedCore.setFailed).toHaveBeenCalledWith(
-      expect.stringContaining('empty password')
+      expect.stringContaining('empty credential')
     );
   });
 
@@ -151,9 +151,55 @@ describe('Safeguard A2A GitHub Action', () => {
     });
 
     expect(MockedHttpClient).toHaveBeenCalledWith(
-      'sg-github-action/1.0',
+      'sg-github-action/1.1',
       expect.any(Array),
       expect.objectContaining({ ignoreSslError: true })
     );
+  });
+
+  it('should request an SSH private key and mask it line by line', async () => {
+    setupInputs({ credential_type: 'ssh_key' });
+    const pem = ['-----BEGIN OPENSSH PRIVATE KEY-----', 'line-one', 'line-two', '-----END OPENSSH PRIVATE KEY-----'].join('\n');
+    mockGet.mockResolvedValueOnce(mockHttpResponse(200, JSON.stringify(pem)));
+
+    await jest.isolateModulesAsync(async () => {
+      await import('../src/index');
+    });
+
+    expect(mockGet).toHaveBeenCalledWith(
+      'https://safeguard.example.com/service/a2a/v4/Credentials?type=PrivateKey&keyFormat=OpenSsh',
+      expect.any(Object)
+    );
+    expect(mockedCore.setSecret).toHaveBeenCalledWith('line-one');
+    expect(mockedCore.setSecret).toHaveBeenCalledWith('line-two');
+    expect(mockedCore.setOutput).toHaveBeenCalledWith('private_key', pem);
+    expect(mockedCore.setOutput).toHaveBeenCalledWith('credential', pem);
+  });
+
+  it('should reject an unknown credential_type before calling the appliance', async () => {
+    setupInputs({ credential_type: 'token' });
+
+    await jest.isolateModulesAsync(async () => {
+      await import('../src/index');
+    });
+
+    expect(mockGet).not.toHaveBeenCalled();
+    expect(mockedCore.setFailed).toHaveBeenCalledWith(expect.stringContaining('Unsupported credential_type'));
+  });
+
+  it('should trust ca_certificate and cap TLS at 1.2 on every request', async () => {
+    setupInputs({ ca_certificate: 'CA-PEM' });
+    mockGet.mockResolvedValueOnce(mockHttpResponse(401, 'Unauthorized'));
+
+    await jest.isolateModulesAsync(async () => {
+      await import('../src/index');
+    });
+
+    const handler = MockedHttpClient.mock.calls[0][1]![0];
+    const options: Record<string, unknown> = {};
+    handler.prepareRequest(options);
+    expect(options.ca).toBe('CA-PEM');
+    expect(options.maxVersion).toBe('TLSv1.2');
+    expect(options.cert).toEqual(expect.any(String));
   });
 });

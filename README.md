@@ -39,6 +39,9 @@ Before using this action, you need the following configured in your Safeguard ap
 | `client_certificate` | Yes | — | PEM-encoded client certificate **content** (not a file path) |
 | `client_certificate_key` | Yes | — | PEM-encoded private key **content** (not a file path) |
 | `client_certificate_passphrase` | No | `''` | Passphrase for the private key, if encrypted |
+| `credential_type` | No | `'password'` | `'password'` or `'ssh_key'` (the private key of the account) |
+| `ssh_key_format` | No | `'OpenSsh'` | Format of a retrieved SSH key: `OpenSsh`, `Ssh2` or `Putty` |
+| `ca_certificate` | No | `''` | PEM CA certificate (or the appliance certificate) to trust for the appliance connection |
 | `ignore_ssl` | No | `'false'` | Set to `'true'` to skip TLS verification (dev/lab only) |
 | `api_version` | No | `'4'` | Safeguard API version |
 
@@ -46,7 +49,11 @@ Before using this action, you need the following configured in your Safeguard ap
 
 | Output | Description |
 |--------|-------------|
+| `credential` | The retrieved secret, whatever its type. Masked in all workflow logs. |
 | `password` | The retrieved privileged password. Automatically masked in all workflow logs. |
+| `private_key` | The retrieved SSH private key when `credential_type` is `ssh_key`. Masked line by line. |
+
+> The action connects with TLS 1.2. Safeguard requests the client certificate after the TLS handshake, which does not work over TLS 1.3 (the call then fails with HTTP 401). Verified on Safeguard for Privileged Passwords 9.0. Password retrieval is verified against an appliance; SSH key retrieval is covered by unit tests only.
 
 ## Setup
 
@@ -289,9 +296,10 @@ act push --secret-file .secrets -W .github/workflows/deploy.yml
 | Error | Cause | Fix |
 |-------|-------|-----|
 | `Authentication failed (HTTP 401)` | Invalid or expired A2A API key, or wrong client certificate | Verify the API key and client certificate match the A2A registration in Safeguard |
-| `Authentication failed (HTTP 403)` | Certificate user lacks permissions | Check the certificate user's permissions and A2A registration configuration |
+| `Authentication failed (HTTP 403)` | The client certificate does not belong to the certificate user of the A2A registration that owns this API key, or an IP restriction on the registration excludes the runner. (The certificate user needs **no** Safeguard permissions for A2A.) | Use the certificate of the registration's certificate user; check the registration's IP restrictions |
 | `Credential not found (HTTP 404)` | Account exists but has no password set | Set or check-in a password for the account in Safeguard |
-| `UNABLE_TO_VERIFY_LEAF_SIGNATURE` | Appliance uses a self-signed or private CA certificate | Set `ignore_ssl: 'true'` for lab, or add the CA to the runner's trust store for production |
+| `UNABLE_TO_VERIFY_LEAF_SIGNATURE` / `DEPTH_ZERO_SELF_SIGNED_CERT` | Appliance uses a self-signed or private CA certificate | Pass the CA (or the appliance certificate) in `ca_certificate`. `ignore_ssl: 'true'` is for labs only |
+| `ERR_TLS_CERT_ALTNAME_INVALID` | `appliance_url` uses a name or IP address that is not in the appliance certificate | Use the host name the certificate was issued for |
 | `ECONNREFUSED` / `ETIMEDOUT` | Network connectivity | Ensure the runner can reach the appliance (firewall rules, VPN, self-hosted runner) |
 
 ## License

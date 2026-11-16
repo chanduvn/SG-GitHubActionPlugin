@@ -1,6 +1,6 @@
 name: 'One Identity Safeguard Credential Retrieval'
-description: 'Retrieves a privileged password from One Identity Safeguard using the Application-to-Application (A2A) REST API'
-author: 'Your Organization'
+description: 'Retrieves a password or SSH key from One Identity Safeguard using the Application-to-Application (A2A) REST API. Community action, not a One Identity product.'
+author: 'chanduvn'
 
 branding:
   icon: 'lock'
@@ -23,8 +23,20 @@ inputs:
     description: 'Passphrase for the private key, if encrypted (optional)'
     required: false
     default: ''
+  credential_type:
+    description: 'What to retrieve: "password" (default) or "ssh_key" (the private key of the account)'
+    required: false
+    default: 'password'
+  ssh_key_format:
+    description: 'Format of a retrieved SSH private key: OpenSsh (default), Ssh2 or Putty'
+    required: false
+    default: 'OpenSsh'
+  ca_certificate:
+    description: 'PEM-encoded CA certificate (or the appliance certificate itself) to trust for the appliance TLS connection. Use this instead of ignore_ssl when the appliance has a private or self-signed certificate.'
+    required: false
+    default: ''
   ignore_ssl:
-    description: 'Set to "true" to skip TLS certificate verification (development/lab only — never use in production)'
+    description: 'Set to "true" to skip TLS certificate verification (development/lab only — never use in production; prefer ca_certificate)'
     required: false
     default: 'false'
   api_version:
@@ -33,9 +45,13 @@ inputs:
     default: '4'
 
 outputs:
+  credential:
+    description: 'The retrieved secret, whatever its type (masked in logs)'
   password:
-    description: 'The retrieved privileged password (masked in logs via core.setSecret)'
+    description: 'The retrieved password when credential_type is "password" (masked in logs)'
+  private_key:
+    description: 'The retrieved SSH private key when credential_type is "ssh_key" (masked in logs, line by line)'
 
 runs:
-  using: 'node20'
+  using: 'node24'
   main: 'dist/index.js'

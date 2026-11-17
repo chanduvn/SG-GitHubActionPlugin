@@ -1,17 +1,17 @@
-name: Deploy with Safeguard Credentials
+# Example workflow. It runs only when started by hand (Actions tab > Run workflow), because it needs a reachable
+# Safeguard appliance and the SAFEGUARD_* secrets. Copy it into your own repository and adapt the triggers.
+name: Deploy with Safeguard Credentials (example)
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest   # the appliance must be reachable from the runner; lab appliances need a self-hosted runner
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Retrieve database password from Safeguard
         id: safeguard

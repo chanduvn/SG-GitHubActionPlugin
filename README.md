@@ -288,7 +288,7 @@ SAFEGUARD_CLIENT_KEY=-----BEGIN PRIVATE KEY-----
 EOF
 
 # Run the workflow
-act push --secret-file .secrets -W .github/workflows/deploy.yml
+act workflow_dispatch --secret-file .secrets -W .github/workflows/deploy.yml
 ```
 
 ## Troubleshooting
